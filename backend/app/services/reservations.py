@@ -4,6 +4,13 @@ from typing import Dict, Any, Optional
 from zoneinfo import ZoneInfo
 
 
+def _as_money(value: Any) -> Decimal:
+    """Normalize a DB value into a Decimal using money-safe rounding."""
+    if value is None or value == "":
+        return Decimal("0.00")
+    return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 async def calculate_monthly_revenue(
     property_id: str,
     month: int,
@@ -110,13 +117,13 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
                 row = result.fetchone()
                 
                 if row:
-                    total_revenue = Decimal(str(row.total_revenue))
+                    total_revenue = _as_money(row.total_revenue)
                     return {
                         "property_id": property_id,
                         "tenant_id": tenant_id,
-                        "total": str(total_revenue),
-                        "currency": "USD", 
-                        "count": row.reservation_count
+                        "total": format(total_revenue, "f"),
+                        "currency": "USD",
+                        "count": int(row.reservation_count or 0),
                     }
                 else:
                     # No reservations found for this property
@@ -125,11 +132,11 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
                         "tenant_id": tenant_id,
                         "total": "0.00",
                         "currency": "USD",
-                        "count": 0
+                        "count": 0,
                     }
         else:
             raise Exception("Database pool not available")
-            
+
     except Exception as e:
         print(f"Database error for {property_id} (tenant: {tenant_id}): {e}")
         
