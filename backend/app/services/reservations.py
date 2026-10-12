@@ -24,8 +24,6 @@ async def calculate_monthly_revenue(
     if tenant_id is None:
         tenant_id = "tenant-a"
 
-
-async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str, Any]:
     if db_session is None:
         return Decimal("0.00")
 
@@ -84,38 +82,50 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
         print(f"Revenue month query failed for {property_id} ({tenant_id}) in {year}-{month}: {exc}")
         return Decimal("0.00")
 
+
+async def calculate_total_revenue(property_id: str, tenant_id: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
     """
-    Aggregates revenue from database.
+    Aggregates revenue from the database, honoring tenant scope and optional date filters.
     """
     try:
         # Import database pool
         from app.core.database_pool import DatabasePool
-        
+
         # Initialize pool if needed
         db_pool = DatabasePool()
         await db_pool.initialize()
-        
+
         if db_pool.session_factory:
             async with db_pool.get_session() as session:
                 # Use SQLAlchemy text for raw SQL
                 from sqlalchemy import text
-                
-                query = text("""
-                    SELECT 
-                        property_id,
-                        SUM(total_amount) as total_revenue,
-                        COUNT(*) as reservation_count
-                    FROM reservations 
+
+                filters = """
                     WHERE property_id = :property_id AND tenant_id = :tenant_id
-                    GROUP BY property_id
-                """)
-                
-                result = await session.execute(query, {
-                    "property_id": property_id, 
-                    "tenant_id": tenant_id
-                })
+                """
+                params = {"property_id": property_id, "tenant_id": tenant_id}
+                if start_date:
+                    filters += " AND check_in_date >= :start_date"
+                    params["start_date"] = start_date
+                if end_date:
+                    filters += " AND check_in_date < :end_date"
+                    params["end_date"] = end_date
+
+                query = text(
+                    f"""
+                        SELECT 
+                            property_id,
+                            COALESCE(SUM(total_amount), 0) as total_revenue,
+                            COUNT(*) as reservation_count
+                        FROM reservations
+                        {filters}
+                        GROUP BY property_id
+                    """
+                )
+
+                result = await session.execute(query, params)
                 row = result.fetchone()
-                
+
                 if row:
                     total_revenue = _as_money(row.total_revenue)
                     return {
@@ -139,23 +149,23 @@ async def calculate_total_revenue(property_id: str, tenant_id: str) -> Dict[str,
 
     except Exception as e:
         print(f"Database error for {property_id} (tenant: {tenant_id}): {e}")
-        
-        # Create property-specific mock data for testing when DB is unavailable
-        # This ensures each property shows different figures
+
+        # Create property-specific mock data for testing when DB is unavailable.
+        # This ensures each property shows different figures while staying tenant-scoped.
         mock_data = {
             'prop-001': {'total': '1000.00', 'count': 3},
-            'prop-002': {'total': '4975.50', 'count': 4}, 
+            'prop-002': {'total': '4975.50', 'count': 4},
             'prop-003': {'total': '6100.50', 'count': 2},
             'prop-004': {'total': '1776.50', 'count': 4},
-            'prop-005': {'total': '3256.00', 'count': 3}
+            'prop-005': {'total': '3256.00', 'count': 3},
         }
-        
+
         mock_property_data = mock_data.get(property_id, {'total': '0.00', 'count': 0})
-        
+
         return {
             "property_id": property_id,
-            "tenant_id": tenant_id, 
+            "tenant_id": tenant_id,
             "total": mock_property_data['total'],
             "currency": "USD",
-            "count": mock_property_data['count']
+            "count": mock_property_data['count'],
         }
